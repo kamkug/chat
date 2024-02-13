@@ -6,17 +6,27 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 )
 
-const hdrLength = 24
+const (
+	// hdrLength is the length of the message header in bytes.
+	hdrLength = 24
+	// RETRIES is the number of times to retry reading the header.
+	RETRIES int = 3
+)
 
+// Message types.
 const (
 	Init = uint8(iota)
 	Message
 	InCache
 )
+
+// Abstract time.Sleep for the ease of testing.
+var SleepFunc = time.Sleep
 
 // MSG defines the message protocol data.
 type MSG struct {
@@ -40,13 +50,9 @@ func (m MSG) String() string {
 
 // Read waits on the network to receive a chat message.
 func Read(r io.Reader) ([]byte, int, error) {
-
-	// TODO: Not handling potential partial reads.
-
-	// Read the first header length of bytes.
-	buf := make([]byte, hdrLength)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		errors.Wrap(err, "ReadFull header")
+	//
+	buf, err := ReadHeader(r, hdrLength)
+	if err != nil {
 		return nil, 0, err
 	}
 
@@ -64,6 +70,47 @@ func Read(r io.Reader) ([]byte, int, error) {
 	}
 
 	return data, length, nil
+}
+
+// ReadHeader reads the header from the provided io.Reader 'r'.
+// It attempts to read hdrLength bytes, with a retry mechanism in case of an unexpected EOF error.
+// The retry delay increases exponentially with each retry.
+// If the connection is closed (io.EOF), it returns immediately with the error.
+// If any other error occurs during reading, it wraps the error with additional context and returns it.
+// If the header is read successfully, it returns the header bytes and nil error.
+func ReadHeader(r io.Reader, hdrLength int) ([]byte, error) {
+	buf := make([]byte, hdrLength)
+	idx := 0
+	retries := RETRIES
+	for i := 0; i < retries; i++ {
+		if idx == hdrLength {
+			break
+		}
+
+		n, err := io.ReadFull(r, buf[idx:])
+		if err != nil {
+			switch err {
+			case io.EOF:
+				// The connection has been closed
+				return nil, err
+			case io.ErrUnexpectedEOF:
+				// Sleep before retrying, with exponential backoff
+				SleepFunc(calculateExponentialBackoff(i))
+				idx += n
+				continue
+			default:
+				return nil, errors.Wrap(err, "Failed to read the full header")
+			}
+		}
+		break
+	}
+
+	return buf, nil
+}
+
+// Calculates the delay for the next retry using exponential backoff.
+func calculateExponentialBackoff(retries int) time.Duration {
+	return time.Second * time.Duration(1<<uint(retries))
 }
 
 // Decode will take the bytes and create a MSG value.

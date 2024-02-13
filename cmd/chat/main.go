@@ -10,6 +10,8 @@ import (
 
 	"chat/internal/msg"
 
+	"github.com/friendsofgo/errors"
+
 	"github.com/ardanlabs/kit/cfg"
 )
 
@@ -55,6 +57,7 @@ func main() {
 	if err != nil {
 		log.Println("dial", err)
 	}
+	defer conn.Close()
 
 	// Accept keyboard input.
 	reader := bufio.NewReader(os.Stdin)
@@ -80,7 +83,7 @@ func main() {
 		for {
 			data, _, err := msg.Read(conn)
 			if err != nil {
-				log.Println("read", err)
+				log.Printf("read: %+v\n", errors.Cause(err))
 				return
 			}
 
